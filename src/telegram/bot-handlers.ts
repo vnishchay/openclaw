@@ -284,12 +284,7 @@ export const registerTelegramHandlers = ({
     if (shouldSkipUpdate(ctx)) {
       return;
     }
-    // Answer immediately to prevent Telegram from retrying while we process
-    await withTelegramApiErrorLogging({
-      operation: "answerCallbackQuery",
-      runtime,
-      fn: () => bot.api.answerCallbackQuery(callback.id),
-    }).catch(() => {});
+    // Callback query is answered by host middleware before queuing
     try {
       const data = (callback.data ?? "").trim();
       const callbackMessage = callback.message;
@@ -464,8 +459,8 @@ export const registerTelegramHandlers = ({
         const keyboard =
           result.totalPages > 1
             ? buildInlineKeyboard(
-                buildCommandsPaginationKeyboard(result.currentPage, result.totalPages, agentId),
-              )
+              buildCommandsPaginationKeyboard(result.currentPage, result.totalPages, agentId),
+            )
             : undefined;
 
         try {
@@ -827,7 +822,7 @@ export const registerTelegramHandlers = ({
           const entry: TextFragmentEntry = {
             key,
             messages: [{ msg, ctx, receivedAtMs: nowMs }],
-            timer: setTimeout(() => {}, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS),
+            timer: setTimeout(() => { }, TELEGRAM_TEXT_FRAGMENT_MAX_GAP_MS),
           };
           textFragmentBuffer.set(key, entry);
           scheduleTextFragmentFlush(entry);
@@ -883,7 +878,7 @@ export const registerTelegramHandlers = ({
               bot.api.sendMessage(chatId, `⚠️ File too large. Maximum size is ${limitMb}MB.`, {
                 reply_to_message_id: msg.message_id,
               }),
-          }).catch(() => {});
+          }).catch(() => { });
           logger.warn({ chatId, error: errMsg }, "media exceeds size limit");
           return;
         }
@@ -900,12 +895,12 @@ export const registerTelegramHandlers = ({
 
       const allMedia = media
         ? [
-            {
-              path: media.path,
-              contentType: media.contentType,
-              stickerMetadata: media.stickerMetadata,
-            },
-          ]
+          {
+            path: media.path,
+            contentType: media.contentType,
+            stickerMetadata: media.stickerMetadata,
+          },
+        ]
         : [];
       const senderId = msg.from?.id ? String(msg.from.id) : "";
       const conversationKey =

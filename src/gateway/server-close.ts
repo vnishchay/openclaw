@@ -5,6 +5,7 @@ import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
+import { waitForCommandLanesToEmpty } from "../process/command-queue.js";
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
@@ -37,6 +38,12 @@ export function createGatewayCloseHandler(params: {
       typeof opts?.restartExpectedMs === "number" && Number.isFinite(opts.restartExpectedMs)
         ? Math.max(0, Math.floor(opts.restartExpectedMs))
         : null;
+
+    // Wait for active agent tasks to finish before proceeding with service shutdown.
+    // This prevents SIGINT/SIGTERM from causing unhandled promise rejections
+    // and ensuring state (like sessions) is properly persisted.
+    await waitForCommandLanesToEmpty(5_000).catch(() => { });
+
     if (params.bonjourStop) {
       try {
         await params.bonjourStop();
@@ -65,7 +72,7 @@ export function createGatewayCloseHandler(params: {
       await params.stopChannel(plugin.id);
     }
     if (params.pluginServices) {
-      await params.pluginServices.stop().catch(() => {});
+      await params.pluginServices.stop().catch(() => { });
     }
     await stopGmailWatcher();
     params.cron.stop();
@@ -104,9 +111,9 @@ export function createGatewayCloseHandler(params: {
       }
     }
     params.clients.clear();
-    await params.configReloader.stop().catch(() => {});
+    await params.configReloader.stop().catch(() => { });
     if (params.browserControl) {
-      await params.browserControl.stop().catch(() => {});
+      await params.browserControl.stop().catch(() => { });
     }
     await new Promise<void>((resolve) => params.wss.close(() => resolve()));
     const servers =
