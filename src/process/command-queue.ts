@@ -191,6 +191,21 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
 }
 
 /**
+ * Await completion of all queued and active tasks across all lanes.
+ * Useful for graceful shutdown.
+ */
+export async function waitForCommandLanesToEmpty(timeoutMs: number = 30_000): Promise<void> {
+  const start = Date.now();
+  while (getTotalQueueSize() > 0) {
+    if (Date.now() - start >= timeoutMs) {
+      diag.warn(`waitForCommandLanesToEmpty timed out after ${timeoutMs}ms`);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
+/**
  * Reset all lane runtime state to idle. Used after SIGUSR1 in-process
  * restarts where interrupted tasks' finally blocks may not run, leaving
  * stale active task IDs that permanently block new work from draining.

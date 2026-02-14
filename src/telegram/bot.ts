@@ -142,13 +142,23 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const client: ApiClientOptions | undefined =
     shouldProvideFetch || timeoutSeconds
       ? {
-          ...(shouldProvideFetch && fetchImpl ? { fetch: fetchForClient } : {}),
-          ...(timeoutSeconds ? { timeoutSeconds } : {}),
-        }
+        ...(shouldProvideFetch && fetchImpl ? { fetch: fetchForClient } : {}),
+        ...(timeoutSeconds ? { timeoutSeconds } : {}),
+      }
       : undefined;
 
   const bot = new Bot(opts.token, client ? { client } : undefined);
   bot.api.config.use(apiThrottler());
+  // Answer callback queries immediately to prevent Telegram timeouts/retries
+  // even if the sequential queue is backed up by slow processing.
+  bot.on("callback_query", async (ctx, next) => {
+    await withTelegramApiErrorLogging({
+      operation: "answerCallbackQuery",
+      runtime,
+      fn: () => bot.api.answerCallbackQuery(ctx.callbackQuery.id),
+    }).catch(() => { });
+    return next();
+  });
   bot.use(sequentialize(getTelegramSequentialKey));
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
@@ -230,8 +240,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const historyLimit = Math.max(
     0,
     telegramCfg.historyLimit ??
-      cfg.messages?.groupChat?.historyLimit ??
-      DEFAULT_GROUP_HISTORY_LIMIT,
+    cfg.messages?.groupChat?.historyLimit ??
+    DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
   const textLimit = resolveTextChunkLimit(cfg, "telegram", account.accountId);

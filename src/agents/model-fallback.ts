@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
+import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import {
   ensureAuthProfileStore,
   isProfileInCooldown,
@@ -136,10 +137,10 @@ function resolveFallbackCandidates(params: {
 }): ModelCandidate[] {
   const primary = params.cfg
     ? resolveConfiguredModelRef({
-        cfg: params.cfg,
-        defaultProvider: DEFAULT_PROVIDER,
-        defaultModel: DEFAULT_MODEL,
-      })
+      cfg: params.cfg,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+    })
     : null;
   const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
   const defaultModel = primary?.model ?? DEFAULT_MODEL;
@@ -260,44 +261,62 @@ export async function runWithModelFallback<T>(params: {
         continue;
       }
     }
-    try {
-      const result = await params.run(candidate.provider, candidate.model);
-      return {
-        result,
-        provider: candidate.provider,
-        model: candidate.model,
-        attempts,
-      };
-    } catch (err) {
-      if (shouldRethrowAbort(err)) {
-        throw err;
-      }
-      const normalized =
-        coerceToFailoverError(err, {
+
+    const maxRetries = 2;
+    for (let retry = 0; retry <= maxRetries; retry += 1) {
+      try {
+        const result = await params.run(candidate.provider, candidate.model);
+        return {
+          result,
           provider: candidate.provider,
           model: candidate.model,
-        }) ?? err;
-      if (!isFailoverError(normalized)) {
-        throw err;
-      }
+          attempts,
+        };
+      } catch (err) {
+        if (shouldRethrowAbort(err)) {
+          throw err;
+        }
+        const normalized =
+          coerceToFailoverError(err, {
+            provider: candidate.provider,
+            model: candidate.model,
+          }) ?? err;
 
-      lastError = normalized;
-      const described = describeFailoverError(normalized);
-      attempts.push({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: described.message,
-        reason: described.reason,
-        status: described.status,
-        code: described.code,
-      });
-      await params.onError?.({
-        provider: candidate.provider,
-        model: candidate.model,
-        error: normalized,
-        attempt: i + 1,
-        total: candidates.length,
-      });
+        if (!isFailoverError(normalized)) {
+          throw err;
+        }
+
+        const isTransient =
+          normalized.reason === "rate_limit" || normalized.reason === "timeout";
+
+        if (isTransient && retry < maxRetries) {
+          const delay = Math.pow(2, retry) * 1000;
+          diag.warn(
+            `transient error on ${candidate.provider}/${candidate.model}, retrying in ${delay}ms (retry ${retry + 1}/${maxRetries}): ${normalized.message}`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          continue;
+        }
+
+        lastError = normalized;
+        const described = describeFailoverError(normalized);
+        attempts.push({
+          provider: candidate.provider,
+          model: candidate.model,
+          error: described.message,
+          reason: described.reason,
+          status: described.status,
+          code: described.code,
+        });
+        await params.onError?.({
+          provider: candidate.provider,
+          model: candidate.model,
+          error: normalized,
+          attempt: i + 1,
+          total: candidates.length,
+        });
+        break;
+      }
     }
   }
 
@@ -307,13 +326,12 @@ export async function runWithModelFallback<T>(params: {
   const summary =
     attempts.length > 0
       ? attempts
-          .map(
-            (attempt) =>
-              `${attempt.provider}/${attempt.model}: ${attempt.error}${
-                attempt.reason ? ` (${attempt.reason})` : ""
-              }`,
-          )
-          .join(" | ")
+        .map(
+          (attempt) =>
+            `${attempt.provider}/${attempt.model}: ${attempt.error}${attempt.reason ? ` (${attempt.reason})` : ""
+            }`,
+        )
+        .join(" | ")
       : "unknown";
   throw new Error(`All models failed (${attempts.length || candidates.length}): ${summary}`, {
     cause: lastError instanceof Error ? lastError : undefined,
@@ -387,8 +405,8 @@ export async function runWithImageModelFallback<T>(params: {
   const summary =
     attempts.length > 0
       ? attempts
-          .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`)
-          .join(" | ")
+        .map((attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`)
+        .join(" | ")
       : "unknown";
   throw new Error(`All image models failed (${attempts.length || candidates.length}): ${summary}`, {
     cause: lastError instanceof Error ? lastError : undefined,
